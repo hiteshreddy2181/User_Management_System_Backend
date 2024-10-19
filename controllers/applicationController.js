@@ -1,233 +1,215 @@
-import ApplicationSchema from "../models/applicationSchema.js";
-import ClientPostRequirement from "../models/clientPostRequirement.js";
+import oracledb from 'oracledb';
+import bcrypt from 'bcrypt';
+import Jwt from 'jsonwebtoken';
+import { users } from '../models/users.js'; // Ensure you have an OracleDB setup for users model
 
-export const updateChatInitiated = async (req, res) => {
-    const { applicationId, roomID } = req.body;
-  console.log(req.body)
-    if (!applicationId || !roomID) {
-      return res.status(400).json({ message: 'Application ID and Room ID are required' });
-    }
-  
+export const getUserDetails = async (req, res) => {
     try {
-      const application = await ApplicationSchema.findByIdAndUpdate(
-        applicationId,
-        { chatInitiated: true, roomID: roomID }, // Update both chatInitiated and roomId
-        { new: true } // Return the updated document
-      );
-  
-      if (!application) {
-        return res.status(404).json({ message: 'Application not found' });
-      }
-  
-      res.status(200).json(application);
-    } catch (error) {
-      console.error('Error updating chatInitiated and roomId:', error);
-      res.status(500).json({ message: 'Server error' });
-    }
-  };
-  
-  
+        const connection = await oracledb.getConnection();
+        const role = req.user.role; // Assuming you have the user's role set in req.user
 
-export const applyForJobController = async (req, res) => {
+        let user;
+        if (role) {
+            const result = await connection.execute(
+                `SELECT username FROM users WHERE username = :username`,
+                { username: req.user.username },
+                { outFormat: oracledb.OUT_FORMAT_OBJECT }
+            );
+
+            user = result.rows[0];
+        }
+
+        await connection.close();
+
+        if (user) {
+            res.status(200).json(user);
+        } else {
+            res.status(404).send("User not found");
+        }
+    } catch (error) {
+        console.log(error);
+        if (error.name === "TokenExpiredError") {
+            res.status(401).send("Token expired");
+        } else {
+            res.status(500).send("Internal Server Error");
+        }
+    }
+}
+
+export const studentLogin = async (req, res) => {
+    try {
+        const { username, password, role } = req.body;
+
+        // Check if username, password, and role are provided
+        if (!(username && password && role)) {
+            return res.status(400).send("username, password, and role are required");
+        }
+
+        const connection = await oracledb.getConnection();
+
+        // Find user by username
+        const userResult = await connection.execute(
+            `SELECT * FROM users WHERE username = :username`,
+            { username },
+            { outFormat: oracledb.OUT_FORMAT_OBJECT }
+        );
+
+        const user = userResult.rows[0];
+
+        // If user exists and password matches
+        if (user && (await bcrypt.compare(password, user.password))) {
+            let responseRole;
+
+            // Check for the role in the database
+            if (user.role === 'studentadmin') {
+                responseRole = role;  // Return the role received in the request
+            } else if (user.role === 'student') {
+                responseRole = 'student';  // Return 'student'
+            } else if (user.role === 'admin') {
+                responseRole = 'admin';  // Return 'admin'
+            } else {
+                return res.status(403).send("Unauthorized role");
+            }
+
+            // Generate token
+            const token = Jwt.sign(
+                { user_id: user.ID, username, role: responseRole },  // Use the role for the response
+                process.env.TOKEN, // Ensure TOKEN is set in your environment
+                {
+                    expiresIn: "1h"
+                }
+            );
+
+            // Add token to the user object and send response
+            user.token = token;
+            return res.status(200).json({ ...user, role: responseRole });  // Send the role in the response
+        }
+
+        // If credentials are invalid
+        res.status(400).send("Invalid credentials or role mismatch");
+    } catch (error) {
+        console.log(error);
+        res.status(500).send("An error occurred");
+    }
+};
+
+export const addStudent = async (req, res) => {
     try {
         const {
             firstName,
             lastName,
-            technicalSkills,
-            location,
-            email,
-            yearOfExperience,
-            positionId
+            username,
+            password,
+            role,               // Include role in the request
+            startDate,         // Include startDate in the request
+            dateOfAdmission    // Include dateOfAdmission in the request
         } = req.body;
-        const resume = req.file.buffer;
 
-        if (!resume) {
-            return res.status(400).json({ message: 'Resume PDF is required' });
+        const connection = await oracledb.getConnection();
+
+        const studentResult = await connection.execute(
+            `SELECT * FROM users WHERE username = :username`,
+            { username }
+        );
+
+        if (studentResult.rows.length > 0) {
+            return res.status(404).json({ message: 'User name already exists' });
         }
 
-        const jobRequirement = await ClientPostRequirement.findById(positionId);
-        if (!jobRequirement) {
-            return res.status(404).json({ message: 'Application not found' });
-        }
+        const encryptedPassword = await bcrypt.hash(password, 10);
+        await connection.execute(
+            `INSERT INTO users (firstName, lastName, username, password, role, startDate, dateOfAdmission) VALUES (:firstName, :lastName, :username, :password, :role, :startDate, :dateOfAdmission)`,
+            {
+                firstName,
+                lastName,
+                username,
+                password: encryptedPassword,
+                role: role || 'student', // Default to 'student' if not provided
+                startDate,
+                dateOfAdmission
+            },
+            { autoCommit: true }
+        );
 
-        const newApplication = new ApplicationSchema({
-            firstName: firstName,
-            lastName: lastName,
-            email: email,
-            yearsOfExperience: yearOfExperience,
-            techskills: technicalSkills,
-            location,
-            positionApplied: positionId,
-            positionName: jobRequirement.positionName,
-            screeningStatus: 'Pending',
-            resume,
-            status: 'Applied',
-            workerType: jobRequirement.workerType,
-            workMode: jobRequirement.workMode,
-            chatInitiated:false,
-            roomID:'',
-        });
-
-        await newApplication.save();
-
-        res.status(201).json({
-            message: 'Application submitted successfully',
-            newApplication
-        });
+        res.status(201).json({ message: 'Student added successfully' });
     } catch (error) {
-        console.error('Error applying for job:', error);
+        console.error('Error while adding student:', error);
         res.status(500).json({ message: 'Internal Server Error' });
     }
 }
 
-
-export const getApplication = async (req, res) => {
+export const getStudents = async (req, res) => {
     try {
-        const applications = await ApplicationSchema.find({}, { __v: 0 });
-        const transformedRequirements = applications.map(data => {
-            return {
-                id: data._id.toString(),
-                firstName: data.firstName,
-                lastName: data.lastName,
-                email: data.email,
-                yearsOfExperience: data.yearsOfExperience,
-                techskills: data.techskills,
-                location: data.location,
-                positionApplied: data.positionApplied,
-                positionName: data.positionName,
-                screeningStatus: data.screeningStatus,
-                round1: data.round1,
-                round2: data.round2,
-                round3: data.round3,
-                comments: data.comments,
-                resume: data.resume,
-                status: data.status,
-                workerType: data.workerType,
-                workMode: data.workMode,
-                chatInitiated: data.chatInitiated,
-                roomID:data.roomID,
-            };
-        });
-        res.status(200).json(transformedRequirements);
+        const connection = await oracledb.getConnection();
+
+        const result = await connection.execute(
+            `SELECT firstName, lastName, username, role, startDate, dateOfAdmission FROM users WHERE role = :role`,
+            { role: 'student' },
+            { outFormat: oracledb.OUT_FORMAT_OBJECT }
+        );
+
+        await connection.close();
+
+        res.status(200).json(result.rows);
     } catch (error) {
         res.status(500).send(error);
     }
 }
 
-export const recruiterApplicationUpdate = async (req, res) => {
+export const UpdateStudent = async (req, res) => {
     try {
-        const { id } = req.params;
-        const applicationData = await ApplicationSchema.findById(id);
-        if (!applicationData) {
-            return res.status(404).json({ message: 'Job requirement not found' });
+        const { username } = req.params;
+
+        const connection = await oracledb.getConnection();
+        
+        const studentResult = await connection.execute(
+            `SELECT * FROM users WHERE username = :username`,
+            { username }
+        );
+
+        const student = studentResult.rows[0];
+        if (!student) {
+            return res.status(404).json({ message: 'Student not found' });
         }
 
-        const {
-            firstName,
-            lastName,
-            yearsOfExperience,
-            techskills,
-            location,
-            positionApplied,
-            positionName,
-            screeningStatus,
-            round1,
-            round2,
-            round3,
-            comments,
-            email,
-            status,
-            workerType,
-            workMode,
-        } = req.body;
+        const updatedData = req.body;
 
-        applicationData.firstName = firstName || applicationData.firstName;
-        applicationData.lastName = lastName || applicationData.lastName;
-        applicationData.yearsOfExperience = yearsOfExperience || applicationData.yearsOfExperience;
-        applicationData.techskills = techskills || applicationData.techskills;
-        applicationData.location = location || applicationData.location;
-        applicationData.positionApplied = positionApplied || applicationData.positionApplied;
-        applicationData.positionName = positionName || applicationData.positionName;
-        applicationData.screeningStatus = screeningStatus || applicationData.screeningStatus;
-        applicationData.round1 = round1 || applicationData.round1;
-        applicationData.round2 = round2 || applicationData.round2;
-        applicationData.round3 = round3 || applicationData.round3;
-        applicationData.comments = comments || applicationData.comments;
-        applicationData.email = email || applicationData.email;
-        applicationData.workMode = workMode || applicationData.workMode;
-        applicationData.workerType = workerType || applicationData.workerType;
-        applicationData.status = status || applicationData.status;
-        const pdfFile = req.file;
-        if (pdfFile) {
-            applicationData.resume = pdfFile.buffer;
-        }
+        await connection.execute(
+            `UPDATE users SET firstName = :firstName, lastName = :lastName, role = :role, startDate = :startDate, dateOfAdmission = :dateOfAdmission WHERE username = :username`,
+            {
+                ...updatedData,
+                username
+            },
+            { autoCommit: true }
+        );
 
-
-        // Save updated job requirement
-        await applicationData.save();
-
-        res.status(200).json({
-            message: 'Job requirement updated successfully',
-            applicationData
-        });
+        res.status(200).json({ message: 'Student updated successfully' });
     } catch (error) {
-        console.error('Error updating job requirement:', error);
+        console.error('Error while updating student:', error);
         res.status(500).json({ message: 'Internal Server Error' });
     }
 };
-export const recruiterDeleteApplication = async (req, res) => {
+
+export const DeleteStudent = async (req, res) => {
     try {
-        const { id } = req.params;
+        const { username } = req.params;
 
-        // Find the job requirement by ID and delete it
-        const deletedJob = await ApplicationSchema.findByIdAndDelete(id);
+        const connection = await oracledb.getConnection();
 
-        if (!deletedJob) {
-            return res.status(404).json({ message: 'Application requirement not found' });
+        // Find the student by username and delete it
+        const deleteResult = await connection.execute(
+            `DELETE FROM users WHERE username = :username`,
+            { username },
+            { autoCommit: true }
+        );
+
+        if (deleteResult.rowsAffected === 0) {
+            return res.status(404).json({ message: 'Student not found' });
         }
 
-        res.status(200).json({ message: 'Application deleted successfully' });
+        res.status(200).json({ message: 'Student deleted successfully' });
     } catch (error) {
-        console.error('Error deleting application:', error);
+        console.error('Error deleting student:', error);
         res.status(500).json({ message: 'Internal Server Error' });
-    }
-}
-
-export const getSingleApplication = async (req, res) => {
-    try {
-        const email = req.query.email;
-        if (!email) {
-            return res.status(400).json({ error: 'Email query parameter is required' });
-        }
-
-        const decodedEmail = decodeURIComponent(email);
-        const applications = await ApplicationSchema.find({ email: decodedEmail }, { __v: 0 });
-        const transformedRequirements = applications.map(data => {
-            return {
-                id: data._id.toString(),
-                firstName: data.firstName,
-                lastName: data.lastName,
-                email: data.email,
-                yearsOfExperience: data.yearsOfExperience,
-                techskills: data.techskills,
-                location: data.location,
-                positionApplied: data.positionApplied,
-                positionName: data.positionName,
-                screeningStatus: data.screeningStatus,
-                round1: data.round1,
-                round2: data.round2,
-                round3: data.round3,
-                comments: data.comments,
-                resume: data.resume,
-                status: data.status,
-                workerType: data.workerType,
-                workMode: data.workMode,
-                chatInitiated: data.chatInitiated,
-                roomID:data.roomID,
-            };
-        });
-        res.status(200).json(transformedRequirements);
-    } catch (error) {
-        res.status(500).send(error);
     }
 }

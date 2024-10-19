@@ -4,7 +4,6 @@ import bodyParser from 'body-parser';
 import cors from 'cors';
 import router from './routes/main.js';
 import connect from './config/database.js';
-import initializeSocket from './middleware/socket.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -19,9 +18,6 @@ app.use(cors({
 // Use bodyParser middleware
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
-
-// Initialize Socket.IO with the server
-initializeSocket(server);
 
 // Set up routes
 app.use(router);
