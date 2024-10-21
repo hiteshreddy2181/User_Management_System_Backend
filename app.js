@@ -1,3 +1,4 @@
+import dotenv from 'dotenv';
 import express from 'express';
 import http from 'http';
 import bodyParser from 'body-parser';
@@ -5,6 +6,14 @@ import cors from 'cors';
 import router from './routes/main.js';
 import connect from './config/database.js';
 
+
+const result = dotenv.config();
+console.log(result)
+if (result.error) {
+    throw result.error; // Log the error if there's a problem
+}
+
+console.log('JWT Secret:', process.env.TOKEN);
 const app = express();
 const server = http.createServer(app);
 const PORT = 5000;

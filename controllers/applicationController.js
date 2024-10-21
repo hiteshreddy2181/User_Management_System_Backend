@@ -1,17 +1,18 @@
 import oracledb from 'oracledb';
 import bcrypt from 'bcrypt';
 import Jwt from 'jsonwebtoken';
-import { users } from '../models/users.js'; // Ensure you have an OracleDB setup for users model
+import connect from '../config/database.js'
+
 
 export const getUserDetails = async (req, res) => {
     try {
-        const connection = await oracledb.getConnection();
+        const connection = await connect();
         const role = req.user.role; // Assuming you have the user's role set in req.user
 
         let user;
         if (role) {
             const result = await connection.execute(
-                `SELECT username FROM users WHERE username = :username`,
+                `SELECT * FROM users WHERE username = :username`,
                 { username: req.user.username },
                 { outFormat: oracledb.OUT_FORMAT_OBJECT }
             );
@@ -45,7 +46,7 @@ export const studentLogin = async (req, res) => {
             return res.status(400).send("username, password, and role are required");
         }
 
-        const connection = await oracledb.getConnection();
+        const connection = await connect();
 
         // Find user by username
         const userResult = await connection.execute(
@@ -53,19 +54,30 @@ export const studentLogin = async (req, res) => {
             { username },
             { outFormat: oracledb.OUT_FORMAT_OBJECT }
         );
-
+        
         const user = userResult.rows[0];
+        console.log(password)
+        console.log(user.PASSWORD)
+        console.log(user);  // Debug: check if user object contains the password
 
-        // If user exists and password matches
-        if (user && (await bcrypt.compare(password, user.password))) {
+        if (!user || !user.PASSWORD) {
+            return res.status(400).send("Invalid credentials");
+        }
+
+        // const hashedPassword = await bcrypt.hash(password, 10);
+        // console.log(hashedPassword)
+        // If password matches
+        const password_match=await bcrypt.compare(password, user.PASSWORD)
+        console.log(password_match)
+        if (password_match) {
             let responseRole;
-
+            console.log("i AM HERE ALREADY")
             // Check for the role in the database
-            if (user.role === 'studentadmin') {
+            if (user.ROLE === 'studentadmin') {
                 responseRole = role;  // Return the role received in the request
-            } else if (user.role === 'student') {
+            } else if (user.ROLE === 'student') {
                 responseRole = 'student';  // Return 'student'
-            } else if (user.role === 'admin') {
+            } else if (user.ROLE === 'admin') {
                 responseRole = 'admin';  // Return 'admin'
             } else {
                 return res.status(403).send("Unauthorized role");
@@ -73,7 +85,7 @@ export const studentLogin = async (req, res) => {
 
             // Generate token
             const token = Jwt.sign(
-                { user_id: user.ID, username, role: responseRole },  // Use the role for the response
+                {username, role: responseRole },  // Use the role for the response
                 process.env.TOKEN, // Ensure TOKEN is set in your environment
                 {
                     expiresIn: "1h"
@@ -96,7 +108,7 @@ export const studentLogin = async (req, res) => {
 export const addStudent = async (req, res) => {
     try {
         const {
-            firstName,
+            firstname,
             lastName,
             username,
             password,
@@ -105,7 +117,7 @@ export const addStudent = async (req, res) => {
             dateOfAdmission    // Include dateOfAdmission in the request
         } = req.body;
 
-        const connection = await oracledb.getConnection();
+        const connection = await connect();
 
         const studentResult = await connection.execute(
             `SELECT * FROM users WHERE username = :username`,
@@ -118,9 +130,9 @@ export const addStudent = async (req, res) => {
 
         const encryptedPassword = await bcrypt.hash(password, 10);
         await connection.execute(
-            `INSERT INTO users (firstName, lastName, username, password, role, startDate, dateOfAdmission) VALUES (:firstName, :lastName, :username, :password, :role, :startDate, :dateOfAdmission)`,
+            `INSERT INTO users (firstname, lastName, username, password, role, startDate, dateOfAdmission) VALUES (:firstname, :lastName, :username, :password, :role, :startDate, :dateOfAdmission)`,
             {
-                firstName,
+                firstname,
                 lastName,
                 username,
                 password: encryptedPassword,
@@ -140,10 +152,10 @@ export const addStudent = async (req, res) => {
 
 export const getStudents = async (req, res) => {
     try {
-        const connection = await oracledb.getConnection();
+        const connection = await connect();
 
         const result = await connection.execute(
-            `SELECT firstName, lastName, username, role, startDate, dateOfAdmission FROM users WHERE role = :role`,
+            `SELECT firstname, lastName, username, role, startDate, dateOfAdmission FROM users WHERE role = :role`,
             { role: 'student' },
             { outFormat: oracledb.OUT_FORMAT_OBJECT }
         );
@@ -160,7 +172,7 @@ export const UpdateStudent = async (req, res) => {
     try {
         const { username } = req.params;
 
-        const connection = await oracledb.getConnection();
+        const connection = await connect();
         
         const studentResult = await connection.execute(
             `SELECT * FROM users WHERE username = :username`,
@@ -175,7 +187,7 @@ export const UpdateStudent = async (req, res) => {
         const updatedData = req.body;
 
         await connection.execute(
-            `UPDATE users SET firstName = :firstName, lastName = :lastName, role = :role, startDate = :startDate, dateOfAdmission = :dateOfAdmission WHERE username = :username`,
+            `UPDATE users SET firstname = :firstname, lastName = :lastName, role = :role, startDate = :startDate, dateOfAdmission = :dateOfAdmission WHERE username = :username`,
             {
                 ...updatedData,
                 username
@@ -194,7 +206,7 @@ export const DeleteStudent = async (req, res) => {
     try {
         const { username } = req.params;
 
-        const connection = await oracledb.getConnection();
+        const connection = await connect();
 
         // Find the student by username and delete it
         const deleteResult = await connection.execute(

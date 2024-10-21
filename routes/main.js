@@ -2,11 +2,13 @@ import express from 'express';
 import verifyToken from '../middleware/auth.js';
 const router = express.Router();
 import multer from 'multer';
+import dotenv from 'dotenv';
+dotenv.config();
 
 import {getUserDetails,studentLogin, addStudent, getStudents, UpdateStudent, DeleteStudent } from '../controllers/applicationController.js';
 
 
-router.post('/login', studentLogin);
+router.post('/student/login', studentLogin);
 router.get('/userdetails', verifyToken, getUserDetails);
 
 router.post('/add-student', addStudent);
